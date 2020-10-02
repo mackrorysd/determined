@@ -253,7 +253,7 @@ def test_startup_hook() -> None:
 
 
 @pytest.mark.e2e_cpu  # type: ignore
-def test_rng_restore() -> None:
+def test_pytorch_rng_restore() -> None:
     experiment = exp.run_basic_test(
         conf.fixtures_path("pytorch_no_op/const.yaml"),
         conf.fixtures_path("pytorch_no_op"),
@@ -282,6 +282,47 @@ def test_rng_restore() -> None:
 
     for step in range(0, 2):
         for metric in ["np_rand", "rand_rand", "torch_rand"]:
+            first_metric = first_trial["steps"][step + 1]["validation"]["metrics"][
+                "validation_metrics"
+            ][metric]
+            second_metric = second_trial["steps"][step]["validation"]["metrics"][
+                "validation_metrics"
+            ][metric]
+            assert (
+                first_metric == second_metric
+            ), f"failures on iteration: {step} with metric: {metric}"
+
+
+@pytest.mark.e2e_gpu
+def test_keras_rng_restore() -> None:
+    experiment = exp.run_basic_test(
+        conf.fixtures_path("keras_no_op/const.yaml"),
+        conf.fixtures_path("keras_no_op"),
+        1,
+    )
+
+    first_trial = exp.experiment_trials(experiment)[0]
+
+    assert len(first_trial["steps"]) == 3
+
+    first_step = first_trial["steps"][0]
+    first_checkpoint_id = first_trial["steps"][0]["checkpoint"]["id"]
+
+    config_base = conf.load_config(conf.fixtures_path("keras_no_op/const.yaml"))
+    config_obj = copy.deepcopy(config_base)
+    config_obj["searcher"]["source_checkpoint_uuid"] = first_step["checkpoint"]["uuid"]
+
+    experiment2 = exp.run_basic_test_with_temp_config(
+        config_obj, conf.fixtures_path("keras_no_op"), 1
+    )
+
+    second_trial = exp.experiment_trials(experiment2)[0]
+
+    assert len(second_trial["steps"]) == 3
+    assert second_trial["warm_start_checkpoint_id"] == first_checkpoint_id
+
+    for step in range(0, 2):
+        for metric in ["np_rand", "rand_rand"]:
             first_metric = first_trial["steps"][step + 1]["validation"]["metrics"][
                 "validation_metrics"
             ][metric]
