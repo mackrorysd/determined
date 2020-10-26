@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -531,4 +532,123 @@ func (a *apiServer) CreateExperiment(
 	return &apiv1.CreateExperimentResponse{
 		Experiment: protoExp, Config: protoutils.ToStruct(e.Config),
 	}, nil
+}
+
+var metricsStreamPeriod = 30 * time.Second
+
+func (a *apiServer) MetricNames(req *apiv1.MetricNamesRequest, resp apiv1.Determined_MetricNamesServer) error {
+	experimentId := int(req.ExperimentId)
+	seenTrain := make(map[string]bool)
+	seenValid := make(map[string]bool)
+
+	// Get searcher metric, include in first response
+	confBytes, err := a.m.db.ExperimentConfigRaw(experimentId)
+	if err != nil {
+		return errors.Wrapf(err, "error fetching experiment config from database: %d", experimentId)
+	}
+
+	var conf map[string]interface{}
+	var searcher map[string]interface{}
+	var searcherMetric string
+	err = json.Unmarshal(confBytes, &conf)
+	if err != nil {
+		return errors.Wrapf(err, "error unmarshalling experiment config: %d", experimentId)
+	}
+	searcher = conf["searcher"].(map[string]interface{})
+	searcherMetric = searcher["metric"].(string) // TODO deal with errors gracefully
+
+	for {
+		var response apiv1.MetricNamesResponse
+		response.Searcher = searcherMetric // TODO searcher metric always included?
+
+		newTrain, newValid, err := a.m.db.MetricNames(experimentId)
+		if err != nil {
+			return errors.Wrapf(err, "error fetching metric names for experiment: %d", experimentId)
+		}
+		for _, name := range newTrain {
+			if seen := seenTrain[name]; !seen {
+				response.Training = append(response.Training, name)
+				seenTrain[name] = true
+			}
+		}
+		for _, name := range newValid {
+			if seen := seenValid[name]; !seen {
+				response.Validation = append(response.Validation, name)
+				seenValid[name] = true
+			}
+		}
+
+		if err := resp.Send(&response); err != nil {
+			return err
+		}
+
+		experiment, _ := a.getExperiment(experimentId)
+		if experiment.State == experimentv1.State_STATE_COMPLETED {
+			return nil
+		}
+
+		time.Sleep(metricsStreamPeriod)
+		if err := resp.Context().Err(); err != nil {
+			// connection is closed
+			return nil
+		}
+	}
+}
+
+func (a *apiServer) MetricBatches(req *apiv1.MetricBatchesRequest, resp apiv1.Determined_MetricBatchesServer) error {
+	experimentId := int(req.ExperimentId)
+	trainingMetric := req.TrainingMetric
+	validationMetric := req.ValidationMetric
+	if len(trainingMetric) == 0 && len(validationMetric) == 0 {
+		return errors.New("must provide a training metric, or a validation metric: neither provided")
+	}
+	if len(trainingMetric) > 0 && len(validationMetric) > 0 {
+		return errors.New("must provide a training metric, or a validation metric: not both")
+	}
+	var metricType string
+	var metricName string
+	if len(trainingMetric) > 0 {
+		metricType = "training"
+		metricName = trainingMetric
+	} else {
+		metricType = "validation"
+		metricName = validationMetric
+	}
+
+	seenBatches := make(map[int32]bool)
+
+	startTime := time.Unix(0, 0)
+	for {
+		var response apiv1.MetricBatchesResponse
+
+		newBatches, endTime, err := a.m.db.MetricBatches(experimentId, trainingMetric, validationMetric, startTime)
+		if err != nil {
+			return errors.Wrapf(err, "error fetching batches recorded for %s metric %s in experiment %d", metricType, metricName, experimentId)
+		}
+		startTime = endTime
+
+		// This shouldn't be necessary - why are end_time's constantly being updated!?
+		// If that's normal, let's just strip out all the time logic
+		for _, batch := range newBatches {
+			if seen := seenBatches[batch]; !seen {
+				response.Batches = append(response.Batches, batch)
+				seenBatches[batch] = true
+			}
+		}
+
+		if err := resp.Send(&response); err != nil {
+			return errors.Wrapf(err, "error sending batches recorded for metrics")
+		}
+
+		experiment, _ := a.getExperiment(experimentId)
+		if experiment.State == experimentv1.State_STATE_COMPLETED {
+			return nil
+		}
+
+		time.Sleep(metricsStreamPeriod)
+		if err := resp.Context().Err(); err != nil {
+			// connection is closed
+			return nil
+		}
+	}
 }

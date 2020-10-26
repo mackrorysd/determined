@@ -246,3 +246,23 @@ message CreateExperimentResponse {
   // The created experiment config.
   google.protobuf.Struct config = 2;
 }
+
+message MetricNamesRequest {
+  int32 experiment_id = 1;
+}
+
+message MetricNamesResponse {
+  string searcher = 1;
+  repeated string training = 2;
+  repeated string validation = 3;
+}
+
+message MetricBatchesRequest {
+  int32 experiment_id = 1;
+  string training_metric = 2;
+  string validation_metric = 3;
+}
+
+message MetricBatchesResponse {
+  repeated int32 batches = 1;
+}
