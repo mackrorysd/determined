@@ -238,8 +238,8 @@ class PyTorchTrialContext(det.TrialContext):
                 afterwards). Forward passes must still be wrapped by the output of
                 ``torch.cuda.amp.autocast()``. If False, no operations are handled by
                 ``determined.pytorch.PyTorchContext``. The only difference from normal PyTorch AMP
-                API usage would be that the scaler is passed to ``step_optimizer()`` instead of calling
-                ``step()`` on it directly.
+                API usage would be that the scaler is passed to ``step_optimizer()`` instead of
+                calling ``step()`` on it directly.
 
         Returns:
             The scaler. It may be wrapped to add additional functionality for use in Determined.
